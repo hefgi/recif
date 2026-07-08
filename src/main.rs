@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         Command::Remove(args) => commands::remove::run(args),
         Command::List => commands::list::run(),
         Command::Doctor => commands::doctor::run(),
-        Command::Daemon => not_implemented("daemon"),
+        Command::Daemon => recif::daemon::run(),
         Command::Launch(_) => not_implemented("launch"),
     };
     match result {

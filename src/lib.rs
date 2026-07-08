@@ -9,6 +9,7 @@ pub mod canonicalize;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod daemon;
 pub mod daemon_status;
 pub mod denylist;
 pub mod health;
