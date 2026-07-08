@@ -13,6 +13,12 @@ path = "src/main.rs"
 name = "recif"
 path = "src/lib.rs"
 
+[features]
+# Exposes test-only entrypoints (e.g. add::run_with_paths) to integration tests
+# so they can drive commands against a synthesized environment without touching
+# the real ~/.claude or launchd.
+testutil = []
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

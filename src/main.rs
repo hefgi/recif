@@ -1,23 +1,32 @@
 //! Recif binary entrypoint: parse args and dispatch to command handlers.
 
-use anyhow::Result;
+use std::process::ExitCode;
+
 use clap::Parser;
+use colored::Colorize;
 
 use recif::cli::{Cli, Command};
+use recif::commands;
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Add(_) => not_implemented("add"),
-        Command::Remove(_) => not_implemented("remove"),
-        Command::List => not_implemented("list"),
-        Command::Doctor => not_implemented("doctor"),
+    let result = match cli.command {
+        Command::Add(args) => commands::add::run(args),
+        Command::Remove(args) => commands::remove::run(args),
+        Command::List => commands::list::run(),
+        Command::Doctor => commands::doctor::run(),
         Command::Daemon => not_implemented("daemon"),
         Command::Launch(_) => not_implemented("launch"),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{} {:#}", "error:".red().bold(), e);
+            ExitCode::from(1)
+        }
     }
 }
 
-fn not_implemented(name: &str) -> Result<()> {
-    eprintln!("recif {name}: not implemented yet");
-    std::process::exit(2);
+fn not_implemented(name: &str) -> anyhow::Result<()> {
+    anyhow::bail!("recif {name}: not implemented yet")
 }
