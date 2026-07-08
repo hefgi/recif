@@ -170,51 +170,142 @@ fn move_leaked_to_master(
     let dst = master.join(name);
 
     if dst.exists() {
-        // Master wins: discard the profile-local copy.
-        let meta = std::fs::symlink_metadata(&src)
-            .with_context(|| format!("failed to stat {}", src.display()))?;
-        if meta.file_type().is_dir() {
-            std::fs::remove_dir_all(&src)
-                .with_context(|| format!("failed to remove conflicting profile dir {}", src.display()))?;
-        } else {
-            std::fs::remove_file(&src)
-                .with_context(|| format!("failed to remove conflicting profile file {}", src.display()))?;
-        }
-        report
-            .warnings
-            .push(format!("{name}: existed in both, master wins (profile copy discarded)"));
-        return Ok(());
+        return discard_profile_copy(&src, name, report);
     }
 
-    // Prefer atomic rename (same volume under $HOME). Fall back to copy+remove
-    // across devices.
-    match std::fs::rename(&src, &dst) {
-        Ok(()) => {}
-        Err(_) => {
-            copy_recursive(&src, &dst)
-                .with_context(|| format!("failed to copy {} -> {}", src.display(), dst.display()))?;
-            let meta = std::fs::symlink_metadata(&src)?;
-            if meta.file_type().is_dir() {
-                std::fs::remove_dir_all(&src)?;
-            } else {
-                std::fs::remove_file(&src)?;
+    let src_meta = std::fs::symlink_metadata(&src)
+        .with_context(|| format!("failed to stat {}", src.display()))?;
+
+    if src_meta.file_type().is_dir() {
+        // No atomic no-clobber rename for directories in std. `rename` would
+        // silently REPLACE a dst that appeared since the check above, so we only
+        // commit it while dst is still absent and treat any failure that means
+        // "dst now exists" as the master-wins case (§7.5). This never overwrites
+        // an existing master tree.
+        match std::fs::rename(&src, &dst) {
+            Ok(()) => {}
+            Err(e) if is_cross_device(&e) => {
+                // Genuine EXDEV: copy into a NEW master dir, refusing to merge
+                // into one that appeared concurrently. Copy to a temp sibling,
+                // then atomically rename into place (no-clobber).
+                if dst.exists() {
+                    return discard_profile_copy(&src, name, report);
+                }
+                let staging = master.join(format!(".recif-staging-{name}"));
+                let _ = std::fs::remove_dir_all(&staging);
+                copy_dir_new(&src, &staging).with_context(|| {
+                    format!("failed to copy {} -> {}", src.display(), staging.display())
+                })?;
+                // Commit: rename staging → dst only if dst is still absent.
+                if dst.exists() {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return discard_profile_copy(&src, name, report);
+                }
+                std::fs::rename(&staging, &dst).with_context(|| {
+                    format!("failed to commit {} -> {}", staging.display(), dst.display())
+                })?;
+                std::fs::remove_dir_all(&src)
+                    .with_context(|| format!("failed to remove moved dir {}", src.display()))?;
+            }
+            Err(_) => {
+                // Any other failure (incl. dst appeared → ENOTEMPTY/EEXIST): the
+                // profile copy loses. Master wins, discard the profile copy.
+                return discard_profile_copy(&src, name, report);
+            }
+        }
+    } else {
+        // File (or symlink-to-file): atomic no-clobber move via hard-link +
+        // unlink. `link` fails with EEXIST if master/E appeared in the window,
+        // so a concurrently-created master file is never clobbered.
+        match std::fs::hard_link(&src, &dst) {
+            Ok(()) => {
+                std::fs::remove_file(&src)
+                    .with_context(|| format!("failed to unlink moved file {}", src.display()))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return discard_profile_copy(&src, name, report);
+            }
+            Err(e) if is_cross_device(&e) => {
+                // EXDEV: cannot hard-link across volumes. Copy to a temp file on
+                // the master volume, then atomic no-clobber rename via a fresh
+                // link attempt. Fall back to a guarded copy that refuses to
+                // overwrite an existing dst.
+                if dst.exists() {
+                    return discard_profile_copy(&src, name, report);
+                }
+                let staging = master.join(format!(".recif-staging-{name}"));
+                std::fs::copy(&src, &staging).with_context(|| {
+                    format!("failed to copy {} -> {}", src.display(), staging.display())
+                })?;
+                // Commit no-clobber: link staging→dst, then drop staging.
+                match std::fs::hard_link(&staging, &dst) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(&staging);
+                        std::fs::remove_file(&src).with_context(|| {
+                            format!("failed to unlink moved file {}", src.display())
+                        })?;
+                    }
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&staging);
+                        return discard_profile_copy(&src, name, report);
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("failed to move {} -> {}", src.display(), dst.display())
+                });
             }
         }
     }
+
     report.moved_to_master.push(name.to_string());
     Ok(())
 }
 
-fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(src)?;
+/// Master wins (§7.5): the profile-local copy at `src` is discarded so the
+/// later symlink step points at the master version.
+fn discard_profile_copy(src: &Path, name: &str, report: &mut ReconcileReport) -> Result<()> {
+    let meta = std::fs::symlink_metadata(src)
+        .with_context(|| format!("failed to stat {}", src.display()))?;
     if meta.file_type().is_dir() {
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        }
+        std::fs::remove_dir_all(src)
+            .with_context(|| format!("failed to remove conflicting profile dir {}", src.display()))?;
     } else {
-        std::fs::copy(src, dst)?;
+        std::fs::remove_file(src)
+            .with_context(|| format!("failed to remove conflicting profile file {}", src.display()))?;
+    }
+    report
+        .warnings
+        .push(format!("{name}: existed in both, master wins (profile copy discarded)"));
+    Ok(())
+}
+
+fn is_cross_device(e: &std::io::Error) -> bool {
+    // EXDEV == 18 on macOS and Linux.
+    e.raw_os_error() == Some(18)
+}
+
+/// Copy a directory tree into a `dst` that must NOT already exist (created
+/// fresh), refusing to merge into an existing tree.
+fn copy_dir_new(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir(dst)
+        .with_context(|| format!("failed to create {}", dst.display()))?;
+    copy_recursive_into(src, dst)
+}
+
+fn copy_recursive_into(src: &Path, dst: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let s = entry.path();
+        let d = dst.join(entry.file_name());
+        let meta = std::fs::symlink_metadata(&s)?;
+        if meta.file_type().is_dir() {
+            std::fs::create_dir(&d)?;
+            copy_recursive_into(&s, &d)?;
+        } else {
+            std::fs::copy(&s, &d)?;
+        }
     }
     Ok(())
 }
@@ -353,5 +444,64 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    // Regression: master-wins when the same-named entry exists in both. The
+    // profile file must be discarded and the master bytes preserved (guards the
+    // move_leaked_to_master file path never clobbering master).
+    #[test]
+    fn leaked_file_never_clobbers_existing_master_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        let profile = tmp.path().join(".claude-x");
+        std::fs::create_dir(&profile).unwrap();
+        // profile has a real file that ALSO already exists in master
+        std::fs::write(master.join("dup.json"), b"MASTER").unwrap();
+        std::fs::write(profile.join("dup.json"), b"PROFILE").unwrap();
+
+        let mut report = ReconcileReport::default();
+        move_leaked_to_master(&master, &profile, "dup.json", &mut report).unwrap();
+
+        // master bytes untouched, profile copy discarded
+        assert_eq!(std::fs::read(master.join("dup.json")).unwrap(), b"MASTER");
+        assert!(!profile.join("dup.json").exists());
+        assert!(report.moved_to_master.is_empty());
+        assert!(report.warnings.iter().any(|w| w.contains("master wins")));
+    }
+
+    // A genuinely new leaked file (absent from master) is moved up and its bytes
+    // preserved.
+    #[test]
+    fn new_leaked_file_moved_with_bytes_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        let profile = tmp.path().join(".claude-x");
+        std::fs::create_dir(&profile).unwrap();
+        std::fs::write(profile.join("fresh.json"), b"NEWDATA").unwrap();
+
+        let mut report = ReconcileReport::default();
+        move_leaked_to_master(&master, &profile, "fresh.json", &mut report).unwrap();
+
+        assert_eq!(std::fs::read(master.join("fresh.json")).unwrap(), b"NEWDATA");
+        assert!(!profile.join("fresh.json").exists());
+        assert_eq!(report.moved_to_master, vec!["fresh.json"]);
+    }
+
+    // A leaked real directory absent from master is moved up intact.
+    #[test]
+    fn new_leaked_dir_moved_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        let profile = tmp.path().join(".claude-x");
+        std::fs::create_dir(&profile).unwrap();
+        let d = profile.join("newdir");
+        std::fs::create_dir(&d).unwrap();
+        std::fs::write(d.join("a.txt"), b"A").unwrap();
+
+        let mut report = ReconcileReport::default();
+        move_leaked_to_master(&master, &profile, "newdir", &mut report).unwrap();
+
+        assert_eq!(std::fs::read(master.join("newdir/a.txt")).unwrap(), b"A");
+        assert!(!profile.join("newdir").exists());
     }
 }
