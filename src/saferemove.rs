@@ -37,6 +37,13 @@ fn io_err(path: &Path, source: std::io::Error) -> SafeRemoveError {
     }
 }
 
+/// True only if `path` is a real directory (not a symlink, not a file).
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_dir())
+        .unwrap_or(false)
+}
+
 /// What was done to a single entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Removed {
@@ -142,7 +149,11 @@ pub fn remove_profile(profile_root: &Path, keep_daemon: bool) -> Result<RemovalR
 
     for entry in entries {
         let is_daemon = entry.file_name().map(|n| n == "daemon").unwrap_or(false);
-        if keep_daemon && is_daemon {
+        // Only PRESERVE the daemon entry when it is a genuine real directory
+        // (decision #1 preserves a real daemon/ dir for forensics). If it has
+        // been corrupted into a symlink or a plain file, fall through to the
+        // safe-remove path so the bogus entry is unlinked, never preserved.
+        if keep_daemon && is_daemon && is_real_dir(&entry) {
             continue;
         }
         match remove_profile_entry(&entry, profile_root)? {
@@ -273,6 +284,30 @@ mod tests {
         assert!(matches!(err, SafeRemoveError::EscapingSymlink { .. }));
         // daemon and the escaping target both intact.
         assert!(daemon.exists());
+        assert_eq!(std::fs::read(outside.join("precious")).unwrap(), b"keep");
+    }
+
+    // Regression (finding #4): --keep-daemon must NOT preserve a `daemon` entry
+    // that has been corrupted into a symlink; it should unlink the bogus link
+    // (never following it) while still leaving the root for forensics.
+    #[test]
+    fn keep_daemon_unlinks_corrupted_symlink_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("precious"), b"keep").unwrap();
+
+        let profile = tmp.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        // daemon is wrongly a symlink pointing outside the profile
+        std::os::unix::fs::symlink(&outside, profile.join("daemon")).unwrap();
+
+        let report = remove_profile(&profile, true).unwrap();
+        // the bogus symlink was unlinked (counted as a symlink removal)
+        assert_eq!(report.symlinks, 1);
+        assert!(!profile.join("daemon").exists());
+        // root preserved for forensics, target untouched
+        assert!(profile.exists());
         assert_eq!(std::fs::read(outside.join("precious")).unwrap(), b"keep");
     }
 
