@@ -40,6 +40,33 @@ fn canonical_forms_hash_equal() {
     assert_eq!(path_hash(&via_tilde), path_hash(&via_abs));
 }
 
+/// The load-bearing invariant (§6.4): when the FINAL component is itself a
+/// symlink, its literal name is preserved (NOT resolved), because Claude hashes
+/// the path string. A refactor that resolved the final component would misroute
+/// every symlinked-profile credential slot — this test guards against that.
+#[test]
+fn symlinked_final_component_name_preserved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real_home = std::fs::canonicalize(tmp.path()).unwrap();
+
+    // A real target the profile-name symlink points at.
+    let target = real_home.join("real-target");
+    std::fs::create_dir(&target).unwrap();
+
+    // The profile dir itself is a symlink: .claude-linked -> real-target
+    let linked = real_home.join(".claude-linked");
+    std::os::unix::fs::symlink(&target, &linked).unwrap();
+
+    let got = canonicalize_profile_path(&linked).unwrap();
+
+    // Must keep the literal final name ".claude-linked", NOT resolve to
+    // "real-target".
+    assert_eq!(got, real_home.join(".claude-linked"));
+    assert_ne!(got, target);
+    // And the hash must be of the literal name, differing from the target's.
+    assert_ne!(path_hash(&got), path_hash(&target));
+}
+
 /// `..` in the parent is collapsed via realpath.
 #[test]
 fn dotdot_in_parent_collapsed() {
