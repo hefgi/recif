@@ -9,3 +9,5 @@ pub mod cli;
 pub mod config;
 pub mod denylist;
 pub mod keychain;
+pub mod saferemove;
+pub mod symlink;
