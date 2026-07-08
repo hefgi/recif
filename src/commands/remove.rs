@@ -19,11 +19,9 @@ pub fn run(args: RemoveArgs) -> Result<()> {
         .clone();
 
     // Mandatory confirmation prompt unless --yes (§8.1).
-    if !args.yes {
-        if !confirm(&args.name, &profile.path.display().to_string())? {
-            println!("Aborted.");
-            return Ok(());
-        }
+    if !args.yes && !confirm(&args.name, &profile.path.display().to_string())? {
+        println!("Aborted.");
+        return Ok(());
     }
 
     // Safe removal — never follows symlinks into master (§8.1, §10).
