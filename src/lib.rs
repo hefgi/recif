@@ -14,6 +14,7 @@ pub mod daemon_status;
 pub mod denylist;
 pub mod health;
 pub mod keychain;
+pub mod launch;
 pub mod launchd;
 pub mod profile;
 pub mod saferemove;

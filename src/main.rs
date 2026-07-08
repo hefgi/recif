@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         Command::List => commands::list::run(),
         Command::Doctor => commands::doctor::run(),
         Command::Daemon => recif::daemon::run(),
-        Command::Launch(_) => not_implemented("launch"),
+        Command::Launch(args) => recif::launch::run(args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -25,8 +25,4 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
-}
-
-fn not_implemented(name: &str) -> anyhow::Result<()> {
-    anyhow::bail!("recif {name}: not implemented yet")
 }
