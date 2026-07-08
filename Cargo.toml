@@ -1,0 +1,36 @@
+[package]
+name = "recif"
+version = "0.1.0"
+edition = "2021"
+description = "Claude Profile Switcher — one master ~/.claude, many isolated profiles sharing it via symlinks"
+license = "MIT"
+
+[[bin]]
+name = "recif"
+path = "src/main.rs"
+
+[lib]
+name = "recif"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+sha2 = "0.10"
+dirs = "5"
+notify = "6"
+notify-debouncer-full = "0.3"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+fs2 = "0.4"
+tabled = "0.15"
+colored = "2"
+regex-lite = "0.1"
+chrono = { version = "0.4", features = ["clock"] }
+
+[dev-dependencies]
+tempfile = "3"
