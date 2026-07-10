@@ -27,10 +27,14 @@ struct Row {
 }
 
 pub fn run() -> Result<()> {
-    let (_path, cfg) = crate::commands::load_config()?;
+    let (config_path, cfg) = crate::commands::load_config()?;
 
     // Daemon health line.
-    let svc = Launchd::new(cfg.daemon.launchd_plist.clone(), cfg.daemon.log_file.clone());
+    let svc = Launchd::new(
+        cfg.daemon.launchd_plist.clone(),
+        cfg.daemon.log_file.clone(),
+        config_path.clone(),
+    );
     let state = svc.state().unwrap_or(DaemonState::NotLoaded);
     let daemon_line = match state {
         DaemonState::Running => "running".green().to_string(),

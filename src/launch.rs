@@ -51,8 +51,12 @@ pub struct RealLaunchEnv {
 }
 
 impl RealLaunchEnv {
-    pub fn new(cfg: Config) -> Self {
-        let svc = Launchd::new(cfg.daemon.launchd_plist.clone(), cfg.daemon.log_file.clone());
+    pub fn new(cfg: Config, config_path: std::path::PathBuf) -> Self {
+        let svc = Launchd::new(
+            cfg.daemon.launchd_plist.clone(),
+            cfg.daemon.log_file.clone(),
+            config_path,
+        );
         RealLaunchEnv { svc, cfg }
     }
 }
@@ -99,13 +103,13 @@ impl LaunchEnv for RealLaunchEnv {
 /// testable. Returns the config dir to exec with once the gate is passed, or an
 /// error that the caller turns into a non-zero exit.
 pub fn run(args: LaunchArgs) -> Result<()> {
-    let (_path, cfg) = crate::commands::load_config()?;
+    let (config_path, cfg) = crate::commands::load_config()?;
     let profile = cfg
         .profile(&args.name)
         .ok_or_else(|| anyhow!("no such profile '{}'", args.name))?;
     let config_dir = profile.path.clone();
 
-    let env = RealLaunchEnv::new(cfg.clone());
+    let env = RealLaunchEnv::new(cfg.clone(), config_path);
     gate_and_exec(&env, &config_dir, &args.passthrough)
 }
 

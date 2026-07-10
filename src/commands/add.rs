@@ -83,7 +83,11 @@ pub fn run(args: AddArgs) -> Result<()> {
 
     // 9. Install + start daemon (unless disabled for tests).
     if !args.no_daemon_install {
-        let svc = Launchd::new(cfg.daemon.launchd_plist.clone(), cfg.daemon.log_file.clone());
+        let svc = Launchd::new(
+            cfg.daemon.launchd_plist.clone(),
+            cfg.daemon.log_file.clone(),
+            config_path.clone(),
+        );
         install_daemon(&svc)?;
     }
 

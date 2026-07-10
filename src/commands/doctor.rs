@@ -58,7 +58,11 @@ pub fn run() -> Result<()> {
 
     // 4. Daemon loaded + responsive; reinstall/reload if not.
     summary.checks += 1;
-    let svc = Launchd::new(cfg.daemon.launchd_plist.clone(), cfg.daemon.log_file.clone());
+    let svc = Launchd::new(
+        cfg.daemon.launchd_plist.clone(),
+        cfg.daemon.log_file.clone(),
+        config_path.clone(),
+    );
     let state = svc.state().unwrap_or(DaemonState::NotLoaded);
     let fresh = crate::daemon_status::heartbeat_fresh(&cfg);
     let responsive = matches!(state, DaemonState::Running) && fresh != Some(false);
