@@ -41,8 +41,6 @@ pub trait ServiceManager {
     fn state(&self) -> Result<DaemonState>;
     /// Reload (unload + load) the agent, restarting the daemon.
     fn reload(&self) -> Result<()>;
-    /// Whether the plist file exists on disk.
-    fn plist_exists(&self) -> bool;
 }
 
 /// Real macOS launchd implementation.
@@ -173,10 +171,6 @@ impl ServiceManager for Launchd {
             );
         }
         Ok(())
-    }
-
-    fn plist_exists(&self) -> bool {
-        self.plist_path.exists()
     }
 }
 

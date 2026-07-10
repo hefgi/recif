@@ -155,12 +155,13 @@ pub fn run() -> Result<()> {
 }
 
 fn reinstall_daemon(svc: &dyn ServiceManager) -> Result<()> {
+    // Always regenerate the plist from the CURRENT binary path, not just reload
+    // the existing file. Reloading a stale plist would keep pointing at an old
+    // binary location (e.g. a dev-tree target/ path after the binary was moved
+    // to ~/.local/bin), silently preserving the breakage doctor is meant to fix.
+    // install() writes the plist then (re)loads it, and is idempotent.
     let exe = std::env::current_exe().context("could not resolve recif binary path")?;
-    if svc.plist_exists() {
-        svc.reload()
-    } else {
-        svc.install(&exe)
-    }
+    svc.install(&exe)
 }
 
 fn config_save_best_effort(path: &std::path::Path, cfg: &Config) -> Result<()> {

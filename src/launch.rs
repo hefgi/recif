@@ -75,12 +75,11 @@ impl LaunchEnv for RealLaunchEnv {
     }
 
     fn repair(&self) -> Result<Health> {
+        // Regenerate the plist from the current binary and (re)load — same
+        // rationale as doctor: a stale plist pointing at a moved binary must be
+        // rewritten, not merely reloaded. install() is idempotent.
         let exe = std::env::current_exe()?;
-        if self.svc.plist_exists() {
-            self.svc.reload()?;
-        } else {
-            self.svc.install(&exe)?;
-        }
+        self.svc.install(&exe)?;
         // Give launchd a moment to bring the daemon up.
         std::thread::sleep(std::time::Duration::from_millis(500));
         Ok(self.health())
