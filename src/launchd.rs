@@ -5,8 +5,21 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// The service label used for the Recif daemon launchd agent.
+/// The default service label used for the Recif daemon launchd agent.
 pub const LABEL: &str = "com.recif.daemon";
+
+/// Derive the launchd label from a plist path: the file stem
+/// (`com.recif.daemon.plist` → `com.recif.daemon`). This keeps the `Label` key
+/// in the plist and the `launchctl list <label>` probe in agreement, and lets
+/// an isolated dry-run use a distinct plist (`com.recif.daemon.test.plist`)
+/// without any risk of colliding with the real agent.
+pub fn label_from_plist(plist_path: &Path) -> String {
+    plist_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| LABEL.to_string())
+}
 
 /// Health of the daemon service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,14 +49,26 @@ pub trait ServiceManager {
 pub struct Launchd {
     plist_path: PathBuf,
     log_file: PathBuf,
+    config_path: PathBuf,
+    label: String,
 }
 
 impl Launchd {
-    pub fn new(plist_path: PathBuf, log_file: PathBuf) -> Self {
+    /// `config_path` is baked into the plist as `daemon --config <path>` so the
+    /// daemon never depends on launchd's environment to find its config.
+    pub fn new(plist_path: PathBuf, log_file: PathBuf, config_path: PathBuf) -> Self {
+        let label = label_from_plist(&plist_path);
         Launchd {
             plist_path,
             log_file,
+            config_path,
+            label,
         }
+    }
+
+    /// The launchd label this instance manages (derived from the plist path).
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     /// Generate the plist XML for the daemon given the recif binary path.
@@ -55,11 +80,13 @@ impl Launchd {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{LABEL}</string>
+    <string>{label}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{exe}</string>
         <string>daemon</string>
+        <string>--config</string>
+        <string>{config}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -72,8 +99,25 @@ impl Launchd {
 </dict>
 </plist>
 "#,
+            label = self.label,
             exe = exe.display(),
+            config = self.config_path.display(),
         )
+    }
+}
+
+/// Parse the output of `launchctl list <label>` into a daemon state.
+///
+/// Verified against real macOS output: a running agent's dict contains a
+/// `"PID" = <n>;` line; a loaded-but-stopped agent has no `"PID"` key at all
+/// (only `"LastExitStatus"`). Extracted as a pure function so it is unit
+/// testable against captured fixtures.
+pub fn parse_list_output(text: &str) -> DaemonState {
+    let has_pid = text.lines().any(|l| l.trim_start().starts_with("\"PID\""));
+    if has_pid {
+        DaemonState::Running
+    } else {
+        DaemonState::LoadedNoPid
     }
 }
 
@@ -96,27 +140,18 @@ impl ServiceManager for Launchd {
             return Ok(DaemonState::NotLoaded);
         }
         let output = std::process::Command::new("launchctl")
-            .args(["list", LABEL])
+            .args(["list", &self.label])
             .output();
         let output = match output {
             Ok(o) => o,
             Err(_) => return Ok(DaemonState::NotLoaded),
         };
         if !output.status.success() {
+            // Non-zero exit means the label isn't loaded.
             return Ok(DaemonState::NotLoaded);
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        // `launchctl list <label>` prints a plist-ish dict with "PID" = N; if the
-        // service isn't running there's no PID key (or it's "-").
-        let has_pid = text.lines().any(|l| {
-            let t = l.trim();
-            t.starts_with("\"PID\"") && !t.contains("= -") && !t.ends_with("= 0;")
-        });
-        if has_pid {
-            Ok(DaemonState::Running)
-        } else {
-            Ok(DaemonState::LoadedNoPid)
-        }
+        Ok(parse_list_output(&text))
     }
 
     fn reload(&self) -> Result<()> {
@@ -154,6 +189,7 @@ mod tests {
         let l = Launchd::new(
             PathBuf::from("/tmp/com.recif.daemon.plist"),
             PathBuf::from("/tmp/daemon.log"),
+            PathBuf::from("/Users/x/.recif/config.toml"),
         );
         let xml = l.plist_xml(Path::new("/usr/local/bin/recif"));
         assert!(xml.contains("<string>com.recif.daemon</string>"));
@@ -161,5 +197,44 @@ mod tests {
         assert!(xml.contains("<string>daemon</string>"));
         assert!(xml.contains("<key>KeepAlive</key>"));
         assert!(xml.contains("/tmp/daemon.log"));
+        // The config path MUST be pinned in the plist args (launchd does not
+        // inherit HOME); otherwise the daemon crash-loops.
+        assert!(xml.contains("<string>--config</string>"));
+        assert!(xml.contains("<string>/Users/x/.recif/config.toml</string>"));
+    }
+
+    #[test]
+    fn label_derived_from_plist_and_matches_xml() {
+        let l = Launchd::new(
+            PathBuf::from("/tmp/com.recif.daemon.test.plist"),
+            PathBuf::from("/tmp/daemon.log"),
+            PathBuf::from("/tmp/config.toml"),
+        );
+        assert_eq!(l.label(), "com.recif.daemon.test");
+        let xml = l.plist_xml(Path::new("/bin/recif"));
+        // The Label key and the probe label must agree.
+        assert!(xml.contains("<string>com.recif.daemon.test</string>"));
+    }
+
+    // Fixtures captured from real macOS `launchctl list <label>` output.
+    #[test]
+    fn parse_running_agent_fixture() {
+        // A running agent's dict contains a "PID" line.
+        let running = r#"{
+	"LastExitStatus" = 0;
+	"PID" = 69684;
+	"Label" = "com.example.thing";
+}"#;
+        assert_eq!(parse_list_output(running), DaemonState::Running);
+    }
+
+    #[test]
+    fn parse_stopped_agent_fixture() {
+        // A loaded-but-stopped agent has NO "PID" key, only LastExitStatus.
+        let stopped = r#"{
+	"LastExitStatus" = 0;
+	"Label" = "com.apple.SafariHistoryServiceAgent";
+}"#;
+        assert_eq!(parse_list_output(stopped), DaemonState::LoadedNoPid);
     }
 }
