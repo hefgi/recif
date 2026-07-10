@@ -36,11 +36,20 @@ pub enum Command {
 
     /// [internal] Run the sync daemon (invoked by launchd; not a public command).
     #[command(hide = true)]
-    Daemon,
+    Daemon(DaemonArgs),
 
     /// [internal] Launch gate: health-check then exec `claude` for a profile.
     #[command(hide = true)]
     Launch(LaunchArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct DaemonArgs {
+    /// Explicit config path. launchd does not inherit the interactive shell's
+    /// `HOME`, so the plist pins this to an absolute path; without it the daemon
+    /// would guess the wrong `~/.recif/config.toml` and crash-loop.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]

@@ -20,9 +20,15 @@ use tracing::{error, info};
 use crate::config::{self, Config};
 use crate::daemon_status;
 
-/// Entry point for `recif daemon`.
-pub fn run() -> Result<()> {
-    let config_path = config::default_config_path()?;
+/// Entry point for `recif daemon`. `config_override` is the `--config` path
+/// baked into the launchd plist; launchd does not inherit the interactive
+/// shell's `HOME`, so relying on `default_config_path()` (which resolves `~`)
+/// would make the daemon read the wrong file and crash-loop under launchd.
+pub fn run(config_override: Option<PathBuf>) -> Result<()> {
+    let config_path = match config_override {
+        Some(p) => p,
+        None => config::default_config_path()?,
+    };
     let cfg = config::load(&config_path)
         .with_context(|| format!("failed to load config {}", config_path.display()))?;
 

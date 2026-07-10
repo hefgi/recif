@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         Command::Remove(args) => commands::remove::run(args),
         Command::List => commands::list::run(),
         Command::Doctor => commands::doctor::run(),
-        Command::Daemon => recif::daemon::run(),
+        Command::Daemon(args) => recif::daemon::run(args.config),
         Command::Launch(args) => recif::launch::run(args),
     };
     match result {
