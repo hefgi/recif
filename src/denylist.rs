@@ -13,6 +13,11 @@ use regex_lite::Regex;
 const DENIED_EXACT: &[&str] = &[
     "daemon",
     ".credentials.json",
+    // Per-account identity/state (oauthAccount, userID, per-project state).
+    // Normally lives at $HOME/.claude.json (outside the master), but a stray
+    // copy inside a config dir must never be shared — sharing it would collapse
+    // account identity across profiles. Defense-in-depth: never symlink it.
+    ".claude.json",
     "statsig",
     ".git",
     ".gitignore",
@@ -91,6 +96,7 @@ mod tests {
         for (name, is_dir) in [
             ("daemon", true),
             (".credentials.json", false),
+            (".claude.json", false),
             ("statsig", true),
             (".git", true),
             (".gitignore", false),
