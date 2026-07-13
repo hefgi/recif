@@ -29,8 +29,19 @@ all state. Recif automates creating and maintaining those profile directories.
 
 ```bash
 cargo build --release
-# put target/release/recif on your PATH
+install -m 755 target/release/recif ~/.local/bin/recif   # a dir on your PATH
+codesign --force --sign - ~/.local/bin/recif             # macOS: re-sign after copy
 ```
+
+> **macOS codesign gotcha.** `cargo` ad-hoc-signs the binary at its build
+> location. Plain `cp`/`install` to another path invalidates that signature and,
+> under the hardened runtime, macOS kills the copy on exec with `Killed: 9`
+> (SIGKILL, exit 137) — including the launchd daemon, which would then
+> crash-loop. Re-sign the installed copy with `codesign --force --sign -`.
+> Install to a **stable** location (not the `target/` dir): the daemon plist
+> records the binary's absolute path, so a `cargo clean` or moved repo would
+> otherwise break the daemon. Re-run `recif doctor` after moving the binary to
+> regenerate the plist.
 
 ## Usage
 
