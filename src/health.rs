@@ -75,7 +75,12 @@ pub fn profile_health(path: &Path) -> ProfileHealth {
             let mut denied_ok = true;
             let mut broken_ok = true;
             for (name, kind) in &entries {
-                if name == "daemon" {
+                // `daemon/` and `.claude.json` are the two denied entries that
+                // are EXPECTED to exist as real, per-profile files (the daemon
+                // runtime dir and Claude's per-profile identity/state). They are
+                // denied from *symlinking*, not from existing — so they are not
+                // "leaked" entries and must not mark the profile unhealthy.
+                if name == "daemon" || name == ".claude.json" {
                     continue;
                 }
                 if matches!(kind, EntryKind::RealFile | EntryKind::RealDir)

@@ -70,6 +70,35 @@ pub fn ensure_daemon_dir(profile: &Path) -> Result<bool> {
     }
 }
 
+/// Ensure a per-profile `.claude.json` exists so Claude Code doesn't warn about
+/// a missing config file on first launch. Seeds an empty `{}` ONLY when absent;
+/// an existing file (which Claude populates with per-profile identity/state) is
+/// left untouched. Returns `true` if it seeded a new file.
+///
+/// If a `.claude.json` symlink somehow exists (it must never be symlinked —
+/// it's on the denylist and holds account-specific state), it is unlinked and
+/// replaced with a fresh real file so identity can't leak across profiles.
+pub fn ensure_claude_json(profile: &Path) -> Result<bool> {
+    let path = profile.join(".claude.json");
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            // A symlink here would share identity across profiles — remove it.
+            std::fs::remove_file(&path)
+                .with_context(|| format!("failed to unlink .claude.json symlink {}", path.display()))?;
+            std::fs::write(&path, b"{}\n")
+                .with_context(|| format!("failed to seed .claude.json {}", path.display()))?;
+            Ok(true)
+        }
+        Ok(_) => Ok(false), // real file already present — leave Claude's state alone
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::write(&path, b"{}\n")
+                .with_context(|| format!("failed to seed .claude.json {}", path.display()))?;
+            Ok(true)
+        }
+        Err(e) => Err(e).with_context(|| format!("failed to stat {}", path.display())),
+    }
+}
+
 /// Reconcile a single profile against the master. Idempotent. This is the
 /// shared end-state engine.
 pub fn reconcile_profile(master: &Path, profile: &Path) -> Result<ReconcileReport> {
@@ -82,11 +111,22 @@ pub fn reconcile_profile(master: &Path, profile: &Path) -> Result<ReconcileRepor
     // 2. daemon/ is a real directory.
     report.daemon_recreated = ensure_daemon_dir(profile)?;
 
+    // 2b. Seed a minimal per-profile `.claude.json` if absent. Claude Code
+    //     expects this file inside CLAUDE_CONFIG_DIR and, when missing, prints
+    //     three "configuration file not found" warnings on first launch before
+    //     regenerating it. Seeding an empty `{}` suppresses that noise. It is a
+    //     REAL, per-profile file (never symlinked — it is on the denylist so it
+    //     holds account-specific identity) and is only created when absent, so
+    //     an existing one Claude has populated is never overwritten.
+    ensure_claude_json(profile)?;
+
     // 3. Move any leaked real files up to master FIRST (§7.5), so the desired
     //    set computed next includes them.
     let existing = list_top_level(profile)?;
     for (name, kind) in &existing {
-        if name == "daemon" {
+        if name == "daemon" || name == ".claude.json" {
+            // .claude.json is an expected per-profile real file (see 2b); it is
+            // denied from symlinking and must stay put — not a leak to warn on.
             continue;
         }
         match kind {
@@ -485,6 +525,62 @@ mod tests {
         assert_eq!(std::fs::read(master.join("fresh.json")).unwrap(), b"NEWDATA");
         assert!(!profile.join("fresh.json").exists());
         assert_eq!(report.moved_to_master, vec!["fresh.json"]);
+    }
+
+    #[test]
+    fn seeds_claude_json_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        let profile = tmp.path().join(".claude-x");
+
+        reconcile_profile(&master, &profile).unwrap();
+
+        let cj = profile.join(".claude.json");
+        assert!(cj.exists());
+        // real file, not a symlink
+        assert!(!std::fs::symlink_metadata(&cj).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&cj).unwrap().trim(), "{}");
+        // must NOT be moved up to master (it's per-profile identity)
+        assert!(!master.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn preserves_existing_claude_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        let profile = tmp.path().join(".claude-x");
+        std::fs::create_dir(&profile).unwrap();
+        // Claude has populated it with real identity state
+        std::fs::write(profile.join(".claude.json"), br#"{"oauthAccount":{"x":1}}"#).unwrap();
+
+        reconcile_profile(&master, &profile).unwrap();
+
+        // untouched — never overwritten, never moved to master
+        assert_eq!(
+            std::fs::read_to_string(profile.join(".claude.json")).unwrap(),
+            r#"{"oauthAccount":{"x":1}}"#
+        );
+        assert!(!master.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn replaces_claude_json_symlink_with_real_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let master = fake_master(tmp.path());
+        // a stray master .claude.json a naive setup might have symlinked to
+        std::fs::write(master.join(".claude.json"), b"MASTER-IDENTITY").unwrap();
+        let profile = tmp.path().join(".claude-x");
+        std::fs::create_dir(&profile).unwrap();
+        std::os::unix::fs::symlink(master.join(".claude.json"), profile.join(".claude.json"))
+            .unwrap();
+
+        ensure_claude_json(&profile).unwrap();
+
+        let cj = profile.join(".claude.json");
+        assert!(!std::fs::symlink_metadata(&cj).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&cj).unwrap().trim(), "{}");
+        // master identity untouched
+        assert_eq!(std::fs::read(master.join(".claude.json")).unwrap(), b"MASTER-IDENTITY");
     }
 
     // A leaked real directory absent from master is moved up intact.
