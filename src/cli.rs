@@ -34,6 +34,11 @@ pub enum Command {
     /// Check the Recif setup and auto-fix common issues.
     Doctor,
 
+    /// Remove Recif from the system: stop/unload the daemon, delete the plist,
+    /// remove managed shell aliases, and delete `~/.recif`. Never touches the
+    /// master directory or Keychain credentials.
+    Uninstall(UninstallArgs),
+
     /// [internal] Run the sync daemon (invoked by launchd; not a public command).
     #[command(hide = true)]
     Daemon(DaemonArgs),
@@ -92,6 +97,24 @@ pub struct RemoveArgs {
     pub yes: bool,
 
     /// Override the rc file the alias is removed from.
+    #[arg(long)]
+    pub rc: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+pub struct UninstallArgs {
+    /// Leave the `~/.claude-<name>` profile directories on disk (only tear down
+    /// the daemon, aliases, and `~/.recif`). By default each profile is removed
+    /// via the same safe-unlink path as `recif remove` (never follows symlinks
+    /// into the master).
+    #[arg(long)]
+    pub keep_profiles: bool,
+
+    /// Skip the confirmation prompt (non-interactive use).
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Override the rc file aliases are removed from.
     #[arg(long)]
     pub rc: Option<PathBuf>,
 }

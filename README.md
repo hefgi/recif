@@ -119,21 +119,30 @@ path = "/Users/you/.claude-enzyme"
 
 ## Uninstalling
 
-There is no `recif uninstall` yet; remove it manually:
+```bash
+recif uninstall              # stops+removes the daemon, aliases, profiles, ~/.recif
+recif uninstall --keep-profiles   # same, but leave the profile dirs on disk
+```
+
+`uninstall` stops and unloads the launchd daemon, deletes its plist, removes
+Recif-managed shell aliases, safely removes each profile directory (unlink only
+— never following symlinks into the master), and deletes `~/.recif`. It **never**
+touches the master `~/.claude` or Keychain credentials. It's idempotent and
+best-effort: even a partially-installed setup can be cleaned. Finally, remove
+the binary itself (`rm ~/.local/bin/recif`).
+
+If you need to do it by hand (e.g. the binary is gone):
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.recif.daemon.plist
 rm ~/Library/LaunchAgents/com.recif.daemon.plist
 # remove the recif-managed alias lines (marked "# recif-managed") from ~/.zshrc or ~/.bashrc
 rm -rf ~/.recif
-# optionally, the profile dirs (this does NOT delete ~/.claude or Keychain creds):
-#   rm -rf ~/.claude-<name>   # each entry is a symlink; rm -rf on the DIR is safe
-#   but prefer `recif remove <name>` first, which unlinks without following.
 ```
 
-> ⚠ **Never** `rm -rf` a profile directory that Recif hasn't first been told
-> about — a naive recursive delete follows symlinks into the master and destroys
-> shared data. Use `recif remove <name>`, which unlinks the links only.
+> ⚠ **Never** `rm -rf` a profile directory by hand — a naive recursive delete
+> follows the symlinks into the master and destroys shared data. Use
+> `recif remove <name>` (or `recif uninstall`), which unlink the links only.
 
 ## Development
 

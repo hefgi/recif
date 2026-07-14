@@ -15,6 +15,7 @@ fn main() -> ExitCode {
         Command::Remove(args) => commands::remove::run(args),
         Command::List => commands::list::run(),
         Command::Doctor => commands::doctor::run(),
+        Command::Uninstall(args) => commands::uninstall::run(args),
         Command::Daemon(args) => recif::daemon::run(args.config),
         Command::Launch(args) => recif::launch::run(args),
     };

@@ -41,6 +41,10 @@ pub trait ServiceManager {
     fn state(&self) -> Result<DaemonState>;
     /// Reload (unload + load) the agent, restarting the daemon.
     fn reload(&self) -> Result<()>;
+    /// Unload the agent (stopping the daemon) and remove the plist file.
+    /// Idempotent: succeeds even if the agent isn't loaded or the plist is
+    /// already gone.
+    fn uninstall(&self) -> Result<()>;
 }
 
 /// Real macOS launchd implementation.
@@ -172,6 +176,23 @@ impl ServiceManager for Launchd {
         }
         Ok(())
     }
+
+    fn uninstall(&self) -> Result<()> {
+        // Unload the agent (ignore errors: it may not be loaded) on macOS.
+        if cfg!(target_os = "macos") {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", &self.plist_path.to_string_lossy()])
+                .output();
+        }
+        // Remove the plist file if present (idempotent).
+        match std::fs::remove_file(&self.plist_path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| {
+                format!("failed to remove plist {}", self.plist_path.display())
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +216,23 @@ mod tests {
         // inherit HOME); otherwise the daemon crash-loops.
         assert!(xml.contains("<string>--config</string>"));
         assert!(xml.contains("<string>/Users/x/.recif/config.toml</string>"));
+    }
+
+    #[test]
+    fn uninstall_removes_plist_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plist = tmp.path().join("com.recif.daemon.test.plist");
+        std::fs::write(&plist, b"<plist/>").unwrap();
+        let l = Launchd::new(
+            plist.clone(),
+            tmp.path().join("daemon.log"),
+            tmp.path().join("config.toml"),
+        );
+        // First uninstall removes the plist.
+        l.uninstall().unwrap();
+        assert!(!plist.exists());
+        // Second uninstall is a no-op (idempotent), not an error.
+        l.uninstall().unwrap();
     }
 
     #[test]
